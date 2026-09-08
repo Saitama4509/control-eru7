@@ -18,7 +18,6 @@ def cargar_base_datos():
     try:
       with open(DB_FILE, "r", encoding="utf-8") as f:
         datos = json.load(f)
-        # Parche de seguridad: Asegurar que todas las rutas viejas tengan los nuevos campos
         for fecha, rutas in datos.items():
           for r_name, r_data in rutas.items():
             if "parada_idx" not in r_data:
@@ -47,6 +46,17 @@ if "fecha_activa_control" not in st.session_state:
   st.session_state.fecha_activa_control = None
 if "admin_logueado" not in st.session_state:
   st.session_state.admin_logueado = False
+
+# Control para limpiar el cuadro de texto de carga automáticamente
+if "texto_ruta_input" not in st.session_state:
+  st.session_state.texto_ruta_input = ""
+
+
+# --- ORDENAMIENTO NUMÉRICO INTELIGENTE (F1, F2... F10, F11) ---
+def clave_orden_natural(nombre_ruta):
+  # Extrae todas las partes de texto y números para ordenar matemáticamente
+  partes = re.findall(r"(\d+|\D+)", nombre_ruta)
+  return [int(p) if p.isdigit() else p.lower() for p in partes]
 
 
 # --- FUNCIÓN INTELIGENTE: EXTRAE NOMBRE Y PARADAS ---
@@ -130,7 +140,12 @@ if modo_app == "⚙️ Carga (Admin)":
     if rutas_dia_actual:
       cols_resumen = st.columns(4)
       idx_col = 0
-      for r_name, r_info in sorted(rutas_dia_actual.items()):
+      # ORDENAMIENTO NATURAL EN EL PANEL VISUAL
+      rutas_ordenadas_keys = sorted(
+          rutas_dia_actual.keys(), key=clave_orden_natural
+      )
+      for r_name in rutas_ordenadas_keys:
+        r_info = rutas_dia_actual[r_name]
         est = r_info["estado"]
         veces = r_info.get("veces_controlada", 0)
         if est == "Disponible":
@@ -147,8 +162,11 @@ if modo_app == "⚙️ Carga (Admin)":
       st.info("Todavía no hay rutas cargadas para esta fecha.")
     st.write("---")
 
+    # Cuadro de texto vinculado al session_state para poder limpiarlo automáticamente
     texto_pegado = st.text_area(
-        "Pegá el texto completo de la plataforma aquí:", height=220
+        "Pegá el texto completo de la plataforma aquí:",
+        key="texto_ruta_input",
+        height=220,
     )
 
     if st.button("Procesar y Publicar Ruta", type="primary"):
@@ -172,6 +190,10 @@ if modo_app == "⚙️ Carga (Admin)":
                 "veces_controlada": 0,
             }
             guardar_base_datos(st.session_state.rutas_por_fecha)
+
+            # LIMPIAR EL TEXTO AUTOMÁTICAMENTE
+            st.session_state.texto_ruta_input = ""
+
             st.success(
                 f"¡Éxito! Ruta **{nombre_detectado}** guardada permanentemente"
                 f" para el **{fecha_str}** ({len(paradas_extraidas)} paradas)."
@@ -194,7 +216,12 @@ else:
           f"⚠️ No hay rutas cargadas para la fecha {fecha_str} todavía."
       )
     else:
-      for nombre_ruta, data in sorted(rutas_dia_actual.items()):
+      # ORDENAMIENTO NATURAL EN EL PANEL DE OPERADORES
+      rutas_ordenadas_keys = sorted(
+          rutas_dia_actual.keys(), key=clave_orden_natural
+      )
+      for nombre_ruta in rutas_ordenadas_keys:
+        data = rutas_dia_actual[nombre_ruta]
         col1, col2, col3 = st.columns([2, 1, 1])
 
         estado = data.get("estado", "Disponible")
