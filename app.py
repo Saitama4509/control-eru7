@@ -47,19 +47,13 @@ if "fecha_activa_control" not in st.session_state:
 if "admin_logueado" not in st.session_state:
   st.session_state.admin_logueado = False
 
-# Control para limpiar el cuadro de texto de carga automáticamente
-if "texto_ruta_input" not in st.session_state:
-  st.session_state.texto_ruta_input = ""
 
-
-# --- ORDENAMIENTO NUMÉRICO INTELIGENTE (F1, F2... F10, F11) ---
 def clave_orden_natural(nombre_ruta):
-  # Extrae todas las partes de texto y números para ordenar matemáticamente
   partes = re.findall(r"(\d+|\D+)", nombre_ruta)
   return [int(p) if p.isdigit() else p.lower() for p in partes]
 
 
-# --- FUNCIÓN INTELIGENTE: EXTRAE NOMBRE Y PARADAS ---
+# --- LECTOR ULTRA ROBUSTO (Ignora encabezados y valida direcciones reales) ---
 def procesar_texto_completo(texto_crudo):
   match_nombre = re.search(
       r"(?:Ruta\s+)?([FKM]\d+_[A-Za-z0-9]+)", texto_crudo, re.IGNORECASE
@@ -70,22 +64,30 @@ def procesar_texto_completo(texto_crudo):
   lineas = [l.strip() for l in texto_crudo.split("\n") if l.strip()]
 
   i = 0
+  nro_esperado = 1
+
   while i < len(lineas):
-    if lineas[i].isdigit() and int(lineas[i]) < 300:
-      nro_parada = int(lineas[i])
-      direccion = "Dirección no especificada"
-      paquetes = 1
+    linea = lineas[i]
+    if linea.isdigit():
+      nro = int(linea)
+      if nro == nro_esperado and i + 1 < len(lineas):
+        siguiente_linea = lineas[i + 1]
+        if any(c.isalpha() for c in siguiente_linea):
+          direccion = siguiente_linea
+          paquetes = 1
 
-      if i + 1 < len(lineas):
-        direccion = lineas[i + 1]
+          for j in range(i + 2, min(i + 12, len(lineas))):
+            match_paq = re.search(r"(\d+)\s+paquete", lineas[j], re.IGNORECASE)
+            if match_paq:
+              paquetes = int(match_paq.group(1))
+              break
+            if lineas[j].isdigit() and int(lineas[j]) == nro_esperado + 1:
+              break
 
-      for j in range(i + 2, min(i + 6, len(lineas))):
-        match_paq = re.search(r"(\d+)\s+paquete", lineas[j], re.IGNORECASE)
-        if match_paq:
-          paquetes = int(match_paq.group(1))
-          break
-
-      paradas.append({"nro": nro_parada, "dir": direccion, "paquetes": paquetes})
+          paradas.append(
+              {"nro": nro, "dir": direccion, "paquetes": paquetes}
+          )
+          nro_esperado += 1
     i += 1
 
   return nombre_ruta, paradas
@@ -110,10 +112,9 @@ if fecha_str not in st.session_state.rutas_por_fecha:
 
 rutas_dia_actual = st.session_state.rutas_por_fecha[fecha_str]
 
-# --- VISTA 1: ZONA DE CARGA PROTEGIDA POR PIN ---
+# --- VISTA 1: ZONA DE CARGA (ADMIN) ---
 if modo_app == "⚙️ Carga (Admin)":
   st.subheader("🔐 Área de Administración de Rutas")
-
   PIN_SECRETO = "2026"
 
   if not st.session_state.admin_logueado:
@@ -140,7 +141,6 @@ if modo_app == "⚙️ Carga (Admin)":
     if rutas_dia_actual:
       cols_resumen = st.columns(4)
       idx_col = 0
-      # ORDENAMIENTO NATURAL EN EL PANEL VISUAL
       rutas_ordenadas_keys = sorted(
           rutas_dia_actual.keys(), key=clave_orden_natural
       )
@@ -162,14 +162,46 @@ if modo_app == "⚙️ Carga (Admin)":
       st.info("Todavía no hay rutas cargadas para esta fecha.")
     st.write("---")
 
-    # Cuadro de texto vinculado al session_state para poder limpiarlo automáticamente
-    texto_pegado = st.text_area(
-        "Pegá el texto completo de la plataforma aquí:",
-        key="texto_ruta_input",
-        height=220,
-    )
+    # --- GESTIÓN, REINICIO Y BORRADO DE RUTAS ---
+    if rutas_dia_actual:
+      with st.expander("🛠️ Administrar / Reiniciar / Borrar rutas"):
+        for r_name in list(rutas_dia_actual.keys()):
+          col_g1, col_g2, col_g3 = st.columns([2, 1, 1])
+          with col_g1:
+            est_actual = rutas_dia_actual[r_name]["estado"]
+            prog_actual = rutas_dia_actual[r_name]["parada_idx"]
+            total_p = len(rutas_dia_actual[r_name]["paradas"])
+            st.write(
+                f"**{r_name}** ({total_p} paradas) — *{est_actual}*"
+                f" {f'({prog_actual}/{total_p})' if prog_actual > 0 else ''}"
+            )
+          with col_g2:
+            if st.button("🔄 Reiniciar", key=f"reset_admin_{r_name}"):
+              rutas_dia_actual[r_name]["parada_idx"] = 0
+              rutas_dia_actual[r_name]["estado"] = "Disponible"
+              rutas_dia_actual[r_name]["faltantes"] = []
+              rutas_dia_actual[r_name]["veces_controlada"] = 0
+              guardar_base_datos(st.session_state.rutas_por_fecha)
+              st.success(f"Ruta {r_name} reiniciada a cero.")
+              st.rerun()
+          with col_g3:
+            if st.button("🗑️ Eliminar", key=f"del_admin_{r_name}"):
+              del rutas_dia_actual[r_name]
+              guardar_base_datos(st.session_state.rutas_por_fecha)
+              st.success(f"Ruta {r_name} eliminada correctamente.")
+              st.rerun()
+      st.write("---")
 
-    if st.button("Procesar y Publicar Ruta", type="primary"):
+    # --- FORMULARIO DE CARGA CON AUTOLIMPIEZA ---
+    with st.form("form_carga_ruta", clear_on_submit=True):
+      texto_pegado = st.text_area(
+          "Pegá el texto completo de la plataforma aquí:", height=220
+      )
+      submit_btn = st.form_submit_button(
+          "Procesar y Publicar Ruta", type="primary"
+      )
+
+    if submit_btn:
       if texto_pegado:
         nombre_detectado, paradas_extraidas = procesar_texto_completo(
             texto_pegado
@@ -179,7 +211,8 @@ if modo_app == "⚙️ Carga (Admin)":
           if nombre_detectado in rutas_dia_actual:
             st.error(
                 f"⚠️ ¡Atención! La ruta **{nombre_detectado}** ya se encuentra"
-                f" cargada para la fecha {fecha_str}."
+                f" cargada para la fecha {fecha_str}. Usá 'Eliminar' arriba"
+                " para reemplazarla."
             )
           else:
             rutas_dia_actual[nombre_detectado] = {
@@ -190,13 +223,9 @@ if modo_app == "⚙️ Carga (Admin)":
                 "veces_controlada": 0,
             }
             guardar_base_datos(st.session_state.rutas_por_fecha)
-
-            # LIMPIAR EL TEXTO AUTOMÁTICAMENTE
-            st.session_state.texto_ruta_input = ""
-
             st.success(
-                f"¡Éxito! Ruta **{nombre_detectado}** guardada permanentemente"
-                f" para el **{fecha_str}** ({len(paradas_extraidas)} paradas)."
+                f"¡Éxito! Ruta **{nombre_detectado}** guardada con"
+                f" {len(paradas_extraidas)} paradas perfectas."
             )
             st.rerun()
         else:
@@ -216,7 +245,6 @@ else:
           f"⚠️ No hay rutas cargadas para la fecha {fecha_str} todavía."
       )
     else:
-      # ORDENAMIENTO NATURAL EN EL PANEL DE OPERADORES
       rutas_ordenadas_keys = sorted(
           rutas_dia_actual.keys(), key=clave_orden_natural
       )
@@ -232,33 +260,37 @@ else:
         with col1:
           st.write(
               f"**{nombre_ruta}** — *{total_paradas} paradas*"
-              f" {f'(Progreso: {progreso_actual}/{total_paradas})' if progreso_actual > 0 else ''}"
+              f" {f'(Progreso: {progreso_actual}/{total_paradas})' if progreso_actual > 0 and estado == 'En Control' else ''}"
           )
         with col2:
           if estado == "Disponible":
-            st.success("Disponible")
+            st.markdown("🟢 **Disponible**")
           elif estado == "En Control":
-            st.warning("En Proceso 🟡")
+            st.markdown("🟡 **En Proceso**")
           else:
-            st.info(f"Revisada ({veces} 🔄)")
+            st.markdown(f"✅ **Finalizada** ({veces} 🔄)")
 
         with col3:
-          if estado in ["Disponible", "En Control", "Volver a Controlar"]:
-            if estado == "Disponible":
-              texto_boton = "Tomar Ruta"
-            elif estado == "En Control":
-              texto_boton = "Continuar 🟡"
-            else:
-              texto_boton = "Recontrolar 🔄"
+          if estado == "Disponible":
+            texto_boton = "Tomar Ruta"
+          elif estado == "En Control":
+            texto_boton = "Continuar 🟡"
+          else:
+            texto_boton = "Recontrolar 🔄"
 
-            if st.button(
-                texto_boton, key=f"btn_{fecha_str}_{nombre_ruta}"
-            ):
-              rutas_dia_actual[nombre_ruta]["estado"] = "En Control"
-              guardar_base_datos(st.session_state.rutas_por_fecha)
-              st.session_state.ruta_seleccionada = nombre_ruta
-              st.session_state.fecha_activa_control = fecha_str
-              st.rerun()
+          if st.button(
+              texto_boton,
+              key=f"btn_{fecha_str}_{nombre_ruta}",
+              use_container_width=True,
+          ):
+            if estado == "Finalizada":
+              data["parada_idx"] = 0
+              data["faltantes"] = []
+            data["estado"] = "En Control"
+            guardar_base_datos(st.session_state.rutas_por_fecha)
+            st.session_state.ruta_seleccionada = nombre_ruta
+            st.session_state.fecha_activa_control = fecha_str
+            st.rerun()
 
   # --- CONTROL PASO A PASO DEL OPERADOR ---
   else:
@@ -278,7 +310,7 @@ else:
 
       st.markdown(f"#### Parada N° {parada['nro']}")
       st.info(f"**Dirección:** {parada['dir']}")
-      st.warning(f"**Paquetes a bajar:** {parada['paquetes']}")
+      st.warning(f"**Paquetes:** {parada['paquetes']}")
 
       col1, col2, col3 = st.columns(3)
 
@@ -318,18 +350,17 @@ else:
         st.rerun()
 
     else:
-      st.success("¡Ruta controlada y finalizada con éxito!")
+      st.success("✅ Ruta controlada y finalizada con éxito.")
       faltantes_fin = datos_ruta.get("faltantes", [])
       if faltantes_fin:
         st.error(f"Faltantes registrados en paradas: {faltantes_fin}")
       else:
-        st.balloons()
+        st.info("Sin faltantes registrados en esta ejecución.")
 
-      datos_ruta["estado"] = "Volver a Controlar"
+      datos_ruta["estado"] = "Finalizada"
       datos_ruta["veces_controlada"] = (
           datos_ruta.get("veces_controlada", 0) + 1
       )
-      datos_ruta["parada_idx"] = 0
       guardar_base_datos(st.session_state.rutas_por_fecha)
 
       if st.button("Volver al listado general de rutas", type="primary"):
